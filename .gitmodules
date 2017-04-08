@@ -1,0 +1,6 @@
+[submodule "lib/FastLED"]
+	path = lib/FastLED
+	url = git@github.com:FastLED/FastLED.git
+[submodule "lib/Artnet"]
+	path = lib/Artnet
+	url = git@github.com:jfeye/Artnet.git
