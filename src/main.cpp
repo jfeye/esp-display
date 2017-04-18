@@ -7,24 +7,24 @@
 #include "FastLED.h"
 #include "Artnet.h"
 
-//const char ssid[] = "led_receiver";
-//const char password[] = "led_receiver123";
-//const char ssid[] = "PlanetExpress";
-//const char password[] = "dc30f313ea88fa7cf231684b43ff71a2";
 const char ssid[] = "ISP Dipl 2.4";
 const char password[] = "MartinLeucker";
 
 #define BAUD_RATE 115200
-#define DATA_PIN 4
+#define DATA_PIN 2
 #define NUM_LEDS 336
 #define MAX_CURRENT 7000
 #define PORT 6454
 #define MAX_CHANNELS 504
 #define BUFF_SIZE 1024
 
+#define MODE_PIN 1
+
 CRGB leds[NUM_LEDS];
 Artnet artnet;
 uint8_t old_sequence = 0;
+uint8_t old_universe = 2;
+uint8_t mode = 0;
 
 #define MIN_ANALOG_READ 0
 #define MAX_ANALOG_READ 987
@@ -46,7 +46,19 @@ void updateLut();
 
 void setup() {
   Serial.begin(BAUD_RATE);
-  delay(10);
+  delay(100);
+  Serial.println("Serial started");
+
+  pinMode(MODE_PIN, INPUT_PULLUP);
+  delay(50);
+  mode = digitalRead(MODE_PIN);
+  if (mode == LOW) {
+    Serial.println("Set to Master-mode");
+  } else {
+    Serial.println("Set to Slave-mode");
+  }
+
+  // Slave mode
   WiFi.begin(ssid, password);
   Serial.print("Connecting");
   while (WiFi.status() != WL_CONNECTED) {
@@ -59,6 +71,7 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   /*
+  // Master mode
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid,key);
 
@@ -91,7 +104,7 @@ void loop() {
 
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* data) {
   // 7 lines * 24 LEDs = 168 LEDs , 168 LEDs * 3 Channels = 504 Channels <= 512
-  if (universe * MAX_CHANNELS/3 <= NUM_LEDS && old_sequence != sequence && length == MAX_CHANNELS) {
+  if (universe * MAX_CHANNELS/3 <= NUM_LEDS && old_sequence != sequence && old_universe != universe && length == MAX_CHANNELS) {
     /*
     Serial.print("Universe: ");
     Serial.print(universe);
@@ -113,8 +126,9 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
       leds[(uint16_t)(((universe-1)*MAX_CHANNELS + i)/3)] = CRGB(lut[data[i]], lut[data[i+1]], lut[data[i+2]]);
       //Serial.printf("%3d: %02X %02X %02X%s", ((universe-1)*MAX_CHANNELS + i)/3, data[i], data[i+1], data[i+2], (((universe-1)*MAX_CHANNELS + i)/3)%6 == 5 ? "\n" : "\t");
     }
-    old_sequence = sequence;
     //Serial.printf("\n");
+    old_sequence = sequence;
+    old_universe = universe;
     FastLED.show();
   } else {
     Serial.println("ooo SEQUENCE ORDER ERROR ooo");
