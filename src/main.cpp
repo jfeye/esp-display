@@ -30,7 +30,7 @@ uint8_t mode = 0;
 
 #define MIN_ANALOG_READ 0
 #define MAX_ANALOG_READ 987
-#define NOISE_THRESHOLD 2
+#define NOISE_THRESHOLD 3
 #define MAX_GAMMA 5.0 // should be in [1.0, 8.0]
 #define READ_GAMMA_EVERY 20
 
@@ -46,6 +46,12 @@ void dump(const uint8_t *buf, size_t buflen);
 void updateLut();
 void printIP(String ip, CRGB color, uint8_t reverse);
 
+
+/*
+**************************************************
+*  void setup()
+**************************************************
+*/
 
 void setup() {
   Serial.begin(BAUD_RATE);
@@ -64,8 +70,8 @@ void setup() {
     WiFi.mode(WIFI_AP);
     WiFi.softAP("LED-Display", "led-display");
 
-    Serial.println("LED-Display");
-    Serial.println("led-display");
+    Serial.println("SSID:     LED-Display");
+    Serial.println("Password: led-display");
     my_ip = WiFi.softAPIP();
   } else {
     // Slave mode
@@ -89,15 +95,15 @@ void setup() {
   b = (2.0 * (MAX_GAMMA - 1.0)) / (MAX_ANALOG_READ - MIN_ANALOG_READ);
   updateLut();
 
-  artnet.begin();
-  // this will be called for each packet received
-  artnet.setArtDmxCallback(onDmxFrame);
-
   FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_CURRENT);
 
   printIP(my_ip.toString(), CRGB::Green, 0);
-  delay(10000);
+  delay(6000);
+
+  artnet.begin();
+  // this will be called for each packet received
+  artnet.setArtDmxCallback(onDmxFrame);
 
   Serial.println("Ready.");
 }
@@ -112,13 +118,13 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
   // 7 lines * 24 LEDs = 168 LEDs , 168 LEDs * 3 Channels = 504 Channels <= 512
   if (universe * MAX_CHANNELS/3 <= NUM_LEDS && old_sequence != sequence && old_universe != universe && length == MAX_CHANNELS) {
     /*
+    // debug
     Serial.print("Universe: ");
     Serial.print(universe);
     Serial.print("\tLength: ");
     Serial.print(length);
     Serial.print("\tSequence: ");
     Serial.println(sequence);
-
     dump(data, length);
     */
     if (frameCnt == READ_GAMMA_EVERY-1) {
@@ -170,68 +176,78 @@ void updateLut() {
     } else {
       led_gamma = 1 / (1.0 + a - b * gammaRead);
     }
-    Serial.print("new gamma value is ");
-    Serial.println(led_gamma);
     for (int i = 0; i < 256; i++) {
       lut[i] =  (uint8_t)(ceil(pow(i/255.0, led_gamma) * 255));
     }
+    Serial.print("new gamma value is ");
+    Serial.println(led_gamma);
   }
 }
 
 
 void printIP(String ip, CRGB color, uint8_t reverse) {
-  uint8_t ip_bytes[4] = {0, 0, 0, 0};
+  uint8_t ip_extraChars[4] = {0, 0, 0, 0};
 
   for (uint16_t i=0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
 
   char letters[10][15] = {
+      // '0'
       {1, 1, 1,
        1, 0, 1,
        1, 0, 1,
        1, 0, 1,
        1, 1, 1},
+      // '1'
       {0, 0, 1,
        0, 0, 1,
        0, 0, 1,
        0, 0, 1,
        0, 0, 1},
+      // '2'
       {1, 1, 1,
        0, 0, 1,
        1, 1, 1,
        1, 0, 0,
        1, 1, 1},
+      // '3'
       {1, 1, 1,
        0, 0, 1,
        1, 1, 1,
        0, 0, 1,
        1, 1, 1},
-      {1, 0, 0,
+      // '4'
+      {1, 0, 1,
        1, 0, 1,
        1, 1, 1,
        0, 0, 1,
        0, 0, 1},
+      // '5'
       {1, 1, 1,
        1, 0, 0,
        1, 1, 1,
        0, 0, 1,
        1, 1, 1},
+      // '6'
       {1, 1, 1,
        1, 0, 0,
        1, 1, 1,
        1, 0, 1,
        1, 1, 1},
+      // '7'
       {1, 1, 1,
        0, 0, 1,
        0, 1, 0,
        1, 0, 0,
        1, 0, 0},
+      // '8'
       {1, 1, 1,
        1, 0, 1,
        1, 1, 1,
        1, 0, 1,
        1, 1, 1},
+      // '9'
       {1, 1, 1,
        1, 0, 1,
        1, 1, 1,
@@ -249,12 +265,12 @@ void printIP(String ip, CRGB color, uint8_t reverse) {
       if (chars[i] != '.') {
         cnt++;
       } else {
-        ip_bytes[dots] = 3 - cnt;
+        ip_extraChars[dots] = 3 - cnt;
         cnt = 0;
         dots++;
       }
     }
-    ip_bytes[dots] = 3 - cnt;
+    ip_extraChars[dots] = 3 - cnt;
     dots = 0;
     uint8_t sum = 0;
     for (uint8_t i=0; i < l; i++) {
@@ -265,7 +281,7 @@ void printIP(String ip, CRGB color, uint8_t reverse) {
       if(chars[i] >= '0' && chars[i] <= '9') {
           sum = 0;
           for (uint8_t k = 0; k <= dots; k++) {
-            sum += ip_bytes[k];
+            sum += ip_extraChars[k];
           }
           uint16_t x = (i-dots+sum)*4 + dots - (dots > 1 ? 2 : 0);
           uint16_t y = x/COLS * 7;
