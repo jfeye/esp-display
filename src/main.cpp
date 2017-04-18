@@ -13,12 +13,14 @@ const char password[] = "MartinLeucker";
 #define BAUD_RATE 115200
 #define DATA_PIN 2
 #define NUM_LEDS 336
+#define ROWS 14
+#define COLS 24
 #define MAX_CURRENT 7000
 #define PORT 6454
 #define MAX_CHANNELS 504
 #define BUFF_SIZE 1024
 
-#define MODE_PIN 1
+#define MODE_PIN D1
 
 CRGB leds[NUM_LEDS];
 Artnet artnet;
@@ -42,15 +44,14 @@ uint8_t frameCnt = 0; // will be in [0, READ_GAMMA_EVERY-1], so lookup-table wil
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* data);
 void dump(const uint8_t *buf, size_t buflen);
 void updateLut();
+void printIP(String ip, CRGB color, uint8_t reverse);
 
 
 void setup() {
-  Serial.begin(BAUD_RATE);
-  delay(100);
+  Serial.begin(9600);
   Serial.println("Serial started");
 
   pinMode(MODE_PIN, INPUT_PULLUP);
-  delay(50);
   mode = digitalRead(MODE_PIN);
   if (mode == LOW) {
     Serial.println("Set to Master-mode");
@@ -95,6 +96,10 @@ void setup() {
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_CURRENT);
 
   Serial.println("Ready.");
+
+
+  printIP(WiFi.localIP().toString(), CRGB::Green,1);
+  delay(10000);
 }
 
 void loop() {
@@ -170,4 +175,91 @@ void updateLut() {
       lut[i] =  (uint8_t)(ceil(pow(i/255.0, led_gamma) * 255));
     }
   }
+}
+
+void printIP(String ip, CRGB color, uint8_t reverse){
+
+  for (uint16_t i=0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+
+  char letters[10][15] = {
+      {1, 1, 1,
+       1, 0, 1,
+       1, 0, 1,
+       1, 0, 1,
+       1, 1, 1},
+      {0, 0, 1,
+       0, 0, 1,
+       0, 0, 1,
+       0, 0, 1,
+       0, 0, 1},
+      {1, 1, 1,
+       0, 0, 1,
+       1, 1, 1,
+       1, 0, 0,
+       1, 1, 1},
+      {1, 1, 1,
+       0, 0, 1,
+       1, 1, 1,
+       0, 0, 1,
+       1, 1, 1},
+      {1, 0, 0,
+       1, 0, 1,
+       1, 1, 1,
+       0, 0, 1,
+       0, 0, 1},
+      {1, 1, 1,
+       1, 0, 0,
+       1, 1, 1,
+       0, 0, 1,
+       1, 1, 1},
+      {1, 1, 1,
+       1, 0, 0,
+       1, 1, 1,
+       1, 0, 1,
+       1, 1, 1},
+      {1, 1, 1,
+       0, 0, 1,
+       0, 0, 1,
+       0, 0, 1,
+       0, 0, 1},
+      {1, 1, 1,
+       1, 0, 1,
+       1, 1, 1,
+       1, 0, 1,
+       1, 1, 1},
+      {1, 1, 1,
+       1, 0, 1,
+       1, 1, 1,
+       0, 0, 1,
+       1, 1, 1},
+    };
+    uint8_t l = ip.length();
+    unsigned char chars[16];
+    ip.getBytes(chars, 16);
+
+    uint8_t dots = 0;
+    for (uint8_t i=0; i < l; i++) {
+      Serial.println("c: " + String(chars[i]));
+      if (chars[i] == '.') {
+        dots++;
+      }
+      if(chars[i] >= '0' && chars[i] <= '9'){
+          uint16_t x = (i-dots)*4 + dots;
+          uint16_t y = x/COLS * 6;
+          for(int j=0; j < 15; j++){
+              if(letters[chars[i]-'0'][j]){
+                uint16_t tx = x + j%3;
+                uint16_t ty = y + j/3;
+                uint16_t idx = ty*COLS;
+                if (ty%2 == 1) idx += COLS - (tx%COLS) -1;
+                else idx += tx%COLS;
+                if (reverse) leds[idx] = color;
+                else leds[NUM_LEDS-idx-1] = color;
+              }
+          }
+      }
+    }
+    FastLED.show();
 }
