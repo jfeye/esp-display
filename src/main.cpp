@@ -10,7 +10,7 @@
 const char ssid[] = "ISP Dipl 2.4";
 const char password[] = "MartinLeucker";
 
-#define BAUD_RATE 115200
+#define BAUD_RATE 9600
 #define DATA_PIN 2
 #define NUM_LEDS 336
 #define ROWS 14
@@ -48,41 +48,42 @@ void printIP(String ip, CRGB color, uint8_t reverse);
 
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(BAUD_RATE);
+  delay(500);
   Serial.println("Serial started");
 
   pinMode(MODE_PIN, INPUT_PULLUP);
+  delay(250);
   mode = digitalRead(MODE_PIN);
+
+  IPAddress my_ip;
   if (mode == LOW) {
+    // Master mode
     Serial.println("Set to Master-mode");
+
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("LED-Display", "led-display");
+
+    Serial.println("LED-Display");
+    Serial.println("led-display");
+    my_ip = WiFi.softAPIP();
   } else {
+    // Slave mode
     Serial.println("Set to Slave-mode");
+
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting");
+    while (WiFi.status() != WL_CONNECTED) {
+      Serial.print(".");
+      delay(100);
+    }
+    Serial.print("\nConnected to WiFi ");
+    Serial.println(ssid);
+    my_ip = WiFi.localIP();
   }
 
-  // Slave mode
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.print("\nConnected to WiFi ");
-  Serial.println(ssid);
   Serial.print("Local IP is ");
-  Serial.println(WiFi.localIP());
-
-  /*
-  // Master mode
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid,key);
-
-  Serial.println(ssid);
-  Serial.println(key);
-
-  Serial.print("\nMy IP address: ");
-  Serial.println(WiFi.softAPIP());
-  Serial.println();
-  */
+  Serial.println(my_ip);
 
   a = ((MAX_GAMMA - 1.0) * (MAX_ANALOG_READ + MIN_ANALOG_READ)) / (MAX_ANALOG_READ - MIN_ANALOG_READ);
   b = (2.0 * (MAX_GAMMA - 1.0)) / (MAX_ANALOG_READ - MIN_ANALOG_READ);
@@ -95,12 +96,12 @@ void setup() {
   FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_CURRENT);
 
-  Serial.println("Ready.");
-
-
-  printIP(WiFi.localIP().toString(), CRGB::Green,1);
+  printIP(my_ip.toString(), CRGB::Green, 0);
   delay(10000);
+
+  Serial.println("Ready.");
 }
+
 
 void loop() {
   artnet.read();
@@ -177,7 +178,9 @@ void updateLut() {
   }
 }
 
-void printIP(String ip, CRGB color, uint8_t reverse){
+
+void printIP(String ip, CRGB color, uint8_t reverse) {
+  uint8_t ip_bytes[4] = {0, 0, 0, 0};
 
   for (uint16_t i=0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
@@ -221,9 +224,9 @@ void printIP(String ip, CRGB color, uint8_t reverse){
        1, 1, 1},
       {1, 1, 1,
        0, 0, 1,
-       0, 0, 1,
-       0, 0, 1,
-       0, 0, 1},
+       0, 1, 0,
+       1, 0, 0,
+       1, 0, 0},
       {1, 1, 1,
        1, 0, 1,
        1, 1, 1,
@@ -233,27 +236,45 @@ void printIP(String ip, CRGB color, uint8_t reverse){
        1, 0, 1,
        1, 1, 1,
        0, 0, 1,
-       1, 1, 1},
+       1, 1, 1}
     };
+
     uint8_t l = ip.length();
     unsigned char chars[16];
     ip.getBytes(chars, 16);
 
+    uint8_t cnt = 0;
     uint8_t dots = 0;
+    for (uint8_t i = 0; i < l; i++) {
+      if (chars[i] != '.') {
+        cnt++;
+      } else {
+        ip_bytes[dots] = 3 - cnt;
+        cnt = 0;
+        dots++;
+      }
+    }
+    ip_bytes[dots] = 3 - cnt;
+    dots = 0;
+    uint8_t sum = 0;
     for (uint8_t i=0; i < l; i++) {
-      Serial.println("c: " + String(chars[i]));
+      //Serial.println("c: " + String(chars[i]));
       if (chars[i] == '.') {
         dots++;
       }
-      if(chars[i] >= '0' && chars[i] <= '9'){
-          uint16_t x = (i-dots)*4 + dots;
-          uint16_t y = x/COLS * 6;
+      if(chars[i] >= '0' && chars[i] <= '9') {
+          sum = 0;
+          for (uint8_t k = 0; k <= dots; k++) {
+            sum += ip_bytes[k];
+          }
+          uint16_t x = (i-dots+sum)*4 + dots - (dots > 1 ? 2 : 0);
+          uint16_t y = x/COLS * 7;
           for(int j=0; j < 15; j++){
               if(letters[chars[i]-'0'][j]){
                 uint16_t tx = x + j%3;
                 uint16_t ty = y + j/3;
                 uint16_t idx = ty*COLS;
-                if (ty%2 == 1) idx += COLS - (tx%COLS) -1;
+                if ((ty%2 == 1) == reverse) idx += COLS - (tx%COLS) -1;
                 else idx += tx%COLS;
                 if (reverse) leds[idx] = color;
                 else leds[NUM_LEDS-idx-1] = color;
@@ -261,5 +282,6 @@ void printIP(String ip, CRGB color, uint8_t reverse){
           }
       }
     }
+
     FastLED.show();
 }
