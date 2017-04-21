@@ -2,31 +2,37 @@
 #include <Arduino.h>
 #include <SPI.h> // workaround :(
 
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
+
 //#define FASTLED_ALLOW_INTERRUPTS 0
 #define FASTLED_INTERRUPT_RETRY_COUNT 0
 #include "FastLED.h"
 #include "Artnet.h"
 
-const char ssid[] = "ISP Dipl 2.4";
-const char password[] = "MartinLeucker";
-
 #define BAUD_RATE 9600
+#define EEPROM_SIZE 1024
+
 #define DATA_PIN 2
 #define NUM_LEDS 336
 #define ROWS 14
 #define COLS 24
 #define MAX_CURRENT 7000
+
 #define PORT 6454
 #define MAX_CHANNELS 504
 #define BUFF_SIZE 1024
 
 #define MODE_PIN D1
+uint8_t mode = 0;
 
 CRGB leds[NUM_LEDS];
 Artnet artnet;
 uint8_t old_sequence = 0;
 uint8_t old_universe = 2;
-uint8_t mode = 0;
+
+#define CASE_PIN D0
+uint8_t case_closed = 0;
 
 #define MIN_ANALOG_READ 0
 #define MAX_ANALOG_READ 987
@@ -41,10 +47,16 @@ float a = 0.0;
 float b = 0.0;
 uint8_t frameCnt = 0; // will be in [0, READ_GAMMA_EVERY-1], so lookup-table will be updated every READ_GAMMA_EVERY frames
 
+ESP8266WebServer server(80);
+uint8_t timeout = 100; // timeout for WiFi connection in 100ms, e.g. a value of 10 equals 1s
+
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* data);
 void dump(const uint8_t *buf, size_t buflen);
 void updateLut();
-void printIP(String ip, CRGB color, uint8_t reverse);
+void showIP(String ip, CRGB color, uint8_t reverse);
+
+const char ssid[] = "ISP Dipl 2.4";
+const char password[] = "MartinLeucker";
 
 
 /*
@@ -55,36 +67,55 @@ void printIP(String ip, CRGB color, uint8_t reverse);
 
 void setup() {
   Serial.begin(BAUD_RATE);
-  delay(500);
-  Serial.println("Serial started");
+  EEPROM.begin(EEPROM_SIZE);
 
   pinMode(MODE_PIN, INPUT_PULLUP);
-  delay(250);
-  mode = digitalRead(MODE_PIN);
+  mode = (digitalRead(MODE_PIN) == LOW ? 1 : 0);
+
+  pinMode(CASE_PIN, INPUT_PULLUP);
+  case_closed = (digitalRead(CASE_PIN) == LOW ? 1 : 0);
+
+  delay(500);
 
   IPAddress my_ip;
-  if (mode == LOW) {
+  CRGB color = CRGB::Green;
+  if (mode) {
     // Master mode
     Serial.println("Set to Master-mode");
 
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("LED-Display", "led-display");
+    WiFi.softAP("led-display", "led-display");
 
-    Serial.println("SSID:     LED-Display");
+    Serial.println("SSID:     led-display");
     Serial.println("Password: led-display");
     my_ip = WiFi.softAPIP();
+
+    /*
+    // Set up HTTP-Server
+    server.on("/", serveIndex);
+    server.on("/set", handleSet);
+    server.on("/get", handleGet);
+    server.onNotFound(handleOther);
+    server.begin();
+    */
   } else {
     // Slave mode
     Serial.println("Set to Slave-mode");
 
     WiFi.begin(ssid, password);
     Serial.print("Connecting");
-    while (WiFi.status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED && timeout > 0) {
       Serial.print(".");
       delay(100);
+      timeout--;
     }
-    Serial.print("\nConnected to WiFi ");
-    Serial.println(ssid);
+    if (timeout > 0) {
+      Serial.print("\nConnected to WiFi ");
+      Serial.println(ssid);
+    } else {
+      Serial.println("ERROR: Connection timeout!");
+      color = CRGB::Red;
+    }
     my_ip = WiFi.localIP();
   }
 
@@ -98,8 +129,8 @@ void setup() {
   FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_CURRENT);
 
-  printIP(my_ip.toString(), CRGB::Green, 0);
-  delay(6000);
+  showIP(my_ip.toString(), color, case_closed);
+  delay(5000);
 
   artnet.begin();
   // this will be called for each packet received
@@ -129,19 +160,35 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
     */
     if (frameCnt == READ_GAMMA_EVERY-1) {
       updateLut();
+      case_closed = (digitalRead(CASE_PIN) == LOW ? 1 : 0);
       frameCnt = 0;
     } else {
       frameCnt++;
     }
 
+    uint16_t led_idx = 0;
+
     for (int i = 0; i < length; i = i+3) {
-      leds[(uint16_t)(((universe-1)*MAX_CHANNELS + i)/3)] = CRGB(lut[data[i]], lut[data[i+1]], lut[data[i+2]]);
+      led_idx = (uint16_t)(((universe-1)*MAX_CHANNELS + i)/3);
+      if (case_closed) {
+        if (led_idx >= NUM_LEDS/2) {
+          //Serial.printf( "Upper half: idx=%d , line=%d , new_idx=", led_idx, ((uint16_t)(i/(COLS*3))) );
+          led_idx -= ((uint16_t)(i/(COLS*3))) * (2*COLS) + COLS;
+          //Serial.printf("%d\n", led_idx);
+        } else {
+          //Serial.printf( "Lower half: idx=%d , line=%d , new_idx=", led_idx, ((uint16_t)(i/(COLS*3))) );
+          led_idx += ( (ROWS/2 - 1) - ((uint16_t)(i/(COLS*3))) ) * (2*COLS) + COLS;
+          //Serial.printf("%d\n", led_idx);
+        }
+      }
+      leds[led_idx] = CRGB(lut[data[i]], lut[data[i+1]], lut[data[i+2]]);
       //Serial.printf("%3d: %02X %02X %02X%s", ((universe-1)*MAX_CHANNELS + i)/3, data[i], data[i+1], data[i+2], (((universe-1)*MAX_CHANNELS + i)/3)%6 == 5 ? "\n" : "\t");
     }
     //Serial.printf("\n");
     old_sequence = sequence;
     old_universe = universe;
     FastLED.show();
+
   } else {
     Serial.println("ooo SEQUENCE ORDER ERROR ooo");
     Serial.print("Universe: ");
@@ -185,8 +232,8 @@ void updateLut() {
 }
 
 
-void printIP(String ip, CRGB color, uint8_t reverse) {
-  uint8_t ip_extraChars[4] = {0, 0, 0, 0};
+void showIP(String ip, CRGB color, uint8_t reverse) {
+  uint8_t ip_extraSpaces[4] = {0, 0, 0, 0};
 
   for (uint16_t i=0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
@@ -218,7 +265,7 @@ void printIP(String ip, CRGB color, uint8_t reverse) {
        0, 0, 1,
        1, 1, 1},
       // '4'
-      {1, 0, 1,
+      {1, 0, 0,
        1, 0, 1,
        1, 1, 1,
        0, 0, 1,
@@ -265,12 +312,12 @@ void printIP(String ip, CRGB color, uint8_t reverse) {
       if (chars[i] != '.') {
         cnt++;
       } else {
-        ip_extraChars[dots] = 3 - cnt;
+        ip_extraSpaces[dots] = 3 - cnt;
         cnt = 0;
         dots++;
       }
     }
-    ip_extraChars[dots] = 3 - cnt;
+    ip_extraSpaces[dots] = 3 - cnt;
     dots = 0;
     uint8_t sum = 0;
     for (uint8_t i=0; i < l; i++) {
@@ -281,7 +328,7 @@ void printIP(String ip, CRGB color, uint8_t reverse) {
       if(chars[i] >= '0' && chars[i] <= '9') {
           sum = 0;
           for (uint8_t k = 0; k <= dots; k++) {
-            sum += ip_extraChars[k];
+            sum += ip_extraSpaces[k];
           }
           uint16_t x = (i-dots+sum)*4 + dots - (dots > 1 ? 2 : 0);
           uint16_t y = x/COLS * 7;
