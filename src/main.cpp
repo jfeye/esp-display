@@ -4,6 +4,8 @@
 
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
+#include "send_progmem.h"
+#include "html_index.h"
 
 //#define FASTLED_ALLOW_INTERRUPTS 0
 #define FASTLED_INTERRUPT_RETRY_COUNT 0
@@ -54,6 +56,14 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
 void dump(const uint8_t *buf, size_t buflen);
 void updateLut();
 void showIP(String ip, CRGB color, uint8_t reverse);
+int scan_networks();
+void serveIndex();
+void handleGet();
+void handleOther();
+
+String scannedWiFis = "";
+String storedWiFis = "";
+String storedKeys = "";
 
 const char ssid[] = "ISP Dipl 2.4";
 const char password[] = "MartinLeucker";
@@ -68,6 +78,8 @@ const char password[] = "MartinLeucker";
 void setup() {
   Serial.begin(BAUD_RATE);
   EEPROM.begin(EEPROM_SIZE);
+
+  scan_networks();
 
   pinMode(MODE_PIN, INPUT_PULLUP);
   mode = (digitalRead(MODE_PIN) == LOW ? 1 : 0);
@@ -119,6 +131,11 @@ void setup() {
     my_ip = WiFi.localIP();
   }
 
+  server.on("/", serveIndex);
+  server.on("/get", handleGet);
+  server.onNotFound(handleOther);
+  server.begin();
+
   Serial.print("Local IP is ");
   Serial.println(my_ip);
 
@@ -140,8 +157,109 @@ void setup() {
 }
 
 
+void serveIndex() {
+  server.send(200, "text/html", FPSTR(html_index));
+  sendProgmem(&server, html_index);
+}
+
+
+void handleGet() {
+  for (int i = 0; i < server.args(); i++) {
+    Serial.print("GET request: ");
+    Serial.print(server.argName(i));
+    Serial.print("=");
+    Serial.println(server.arg(i));
+    if (server.argName(i) == "v") {
+       if (server.arg(i) == "s") {
+         server.send(200, "text/plain", scannedWiFis);
+       } else if (server.arg(i) == "e") {
+         server.send(200, "text/plain", storedWiFis);
+       } else {
+         server.send(404, "text/plain", "Invalid value: " + server.arg(i));
+       }
+     } else {
+       server.send(404, "text/plain", "Invalid argument: " + server.argName(i));
+     }
+   }
+}
+
+
+void handleOther() {
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += ( server.method() == HTTP_GET ) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  for ( uint8_t i = 0; i < server.args(); i++ ) {
+    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+  server.send ( 404, "text/plain", message );
+}
+
+
+int scan_networks() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  int n = WiFi.scanNetworks();
+  if (n == 0) {
+    Serial.println("No WiFi networks found.");
+    scannedWiFis = "[]";
+    return 0;
+  } else {
+    Serial.printf("%d WiFi networks found\n", n);
+    scannedWiFis = "[";
+    for (int i = 0; i < n; i++) {
+      Serial.print(i+1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      scannedWiFis += "\"" + WiFi.SSID(i) + "\"";
+      scannedWiFis += (i < n-1 ? "," : "");
+      Serial.println(WiFi.encryptionType(i) == ENC_TYPE_NONE ? " " : "*");
+    }
+    scannedWiFis += "]";
+  }
+
+  uint16_t eeprom_idx = 1;
+  uint8_t e = EEPROM.read(0);
+  if (e >= 32) {
+    e = 0;
+    EEPROM.write(0, 0);
+  }
+  uint8_t s = 0;
+  uint8_t p = 0;
+  storedWiFis = "[";
+  storedKeys = "[";
+  if (e > 0) {
+    for (int i = 0; i < e; i++) {
+      storedWiFis += "\"";
+      s = EEPROM.read(eeprom_idx++);
+      for (int j = 0; j < s; j++) {
+        storedWiFis += "" + char(EEPROM.read(eeprom_idx++));
+      }
+      storedWiFis += "\"";
+      storedWiFis += (i < e-1 ? "," : "");
+
+      storedKeys += "\"";
+      p = EEPROM.read(eeprom_idx++);
+      for (int j = 0; j < p; j++) {
+        storedKeys += "" + char(EEPROM.read(eeprom_idx++));
+      }
+      storedKeys += "\"";
+      storedKeys += (i < e-1 ? "," : "");
+    }
+  }
+  storedWiFis += "]";
+  storedKeys += "]";
+}
+
+
 void loop() {
   artnet.read();
+  server.handleClient();
 }
 
 
@@ -167,28 +285,21 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
     }
 
     uint16_t led_idx = 0;
-
     for (int i = 0; i < length; i = i+3) {
       led_idx = (uint16_t)(((universe-1)*MAX_CHANNELS + i)/3);
       if (case_closed) {
         if (led_idx >= NUM_LEDS/2) {
-          //Serial.printf( "Upper half: idx=%d , line=%d , new_idx=", led_idx, ((uint16_t)(i/(COLS*3))) );
           led_idx -= ((uint16_t)(i/(COLS*3))) * (2*COLS) + COLS;
-          //Serial.printf("%d\n", led_idx);
-        } else {
-          //Serial.printf( "Lower half: idx=%d , line=%d , new_idx=", led_idx, ((uint16_t)(i/(COLS*3))) );
-          led_idx += ( (ROWS/2 - 1) - ((uint16_t)(i/(COLS*3))) ) * (2*COLS) + COLS;
-          //Serial.printf("%d\n", led_idx);
+        } else { // 2
+          led_idx += ( (ROWS/(3*NUM_LEDS/MAX_CHANNELS) - 1) - ((uint16_t)(i/(COLS*3))) ) * (2*COLS) + COLS;
         }
       }
       leds[led_idx] = CRGB(lut[data[i]], lut[data[i+1]], lut[data[i+2]]);
-      //Serial.printf("%3d: %02X %02X %02X%s", ((universe-1)*MAX_CHANNELS + i)/3, data[i], data[i+1], data[i+2], (((universe-1)*MAX_CHANNELS + i)/3)%6 == 5 ? "\n" : "\t");
     }
-    //Serial.printf("\n");
     old_sequence = sequence;
     old_universe = universe;
-    FastLED.show();
 
+    FastLED.show();
   } else {
     Serial.println("ooo SEQUENCE ORDER ERROR ooo");
     Serial.print("Universe: ");
@@ -247,11 +358,11 @@ void showIP(String ip, CRGB color, uint8_t reverse) {
        1, 0, 1,
        1, 1, 1},
       // '1'
-      {0, 0, 1,
-       0, 0, 1,
-       0, 0, 1,
-       0, 0, 1,
-       0, 0, 1},
+      {0, 1, 0,
+       1, 1, 0,
+       0, 1, 0,
+       0, 1, 0,
+       1, 1, 1},
       // '2'
       {1, 1, 1,
        0, 0, 1,
@@ -286,8 +397,8 @@ void showIP(String ip, CRGB color, uint8_t reverse) {
       {1, 1, 1,
        0, 0, 1,
        0, 1, 0,
-       1, 0, 0,
-       1, 0, 0},
+       0, 1, 0,
+       0, 1, 0},
       // '8'
       {1, 1, 1,
        1, 0, 1,
@@ -321,7 +432,6 @@ void showIP(String ip, CRGB color, uint8_t reverse) {
     dots = 0;
     uint8_t sum = 0;
     for (uint8_t i=0; i < l; i++) {
-      //Serial.println("c: " + String(chars[i]));
       if (chars[i] == '.') {
         dots++;
       }
