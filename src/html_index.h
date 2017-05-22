@@ -1,5 +1,11 @@
 const char html_index[] PROGMEM = R"=====(
   <!DOCTYPE HTML>
+  <!--
+    Run this code through
+    https://htmlcompressor.com/compressor/
+    and remove linebreaks
+    before pasting it in html_index.h
+  -->
   <html>
   <head lang="de">
     <meta charset="utf-8">
@@ -9,6 +15,7 @@ const char html_index[] PROGMEM = R"=====(
       function gebID(e) {
         return document.getElementById(e);
       }
+
       function req(url) {
         var xhr = new XMLHttpRequest();
         var res = "";
@@ -22,6 +29,7 @@ const char html_index[] PROGMEM = R"=====(
         xhr.send(null);
         return res;
       }
+
       var scans = [];
       var stored = [];
 
@@ -46,11 +54,15 @@ const char html_index[] PROGMEM = R"=====(
           newRow = theTable.insertRow(theTable.rows.length);
           newCell = newRow.insertCell(0);
           newCell.onclick = function() {
-            gebID("ssid").defaultValue = this.innerHTML;
+            gebID("ssid").value = this.innerHTML;
           };
           newCell.innerHTML = stored[i];
         }
         theTable.getElementsByTagName("tbody")[0].align = "left";
+      }
+
+      function send() {
+        req("get?s=" + gebID("ssid").value + "&p=" + gebID("key").value);
       }
     </script>
     <style>
@@ -60,7 +72,7 @@ const char html_index[] PROGMEM = R"=====(
         color: #000;
       }
       button {
-        width: 80px;
+        width: 120px;
         margin: 2px 2px -10px 2px;
       }
       div {
@@ -105,7 +117,7 @@ const char html_index[] PROGMEM = R"=====(
               <td><input id="key" type="password" size=128 onchange="gebID('store').disabled=false"></td>
             </tr>
           </table>
-          <button id="store" disabled onclick="this.disabled=true">Store</button>
+          <button id="store" disabled onclick="send();this.disabled=true">Connect</button>
         </fieldset>
       </div>
       <div>

@@ -60,13 +60,14 @@ int scan_networks();
 void serveIndex();
 void handleGet();
 void handleOther();
+void getSSID(int idx, char buffer[]);
+int getSSIDLength(int idx);
+void getKey(int idx, char buffer[]);
+int getKeyLength(int idx);
 
 String scannedWiFis = "";
 String storedWiFis = "";
 String storedKeys = "";
-
-const char ssid[] = "ISP Dipl 2.4";
-const char password[] = "MartinLeucker";
 
 
 /*
@@ -79,10 +80,14 @@ void setup() {
   Serial.begin(BAUD_RATE);
   EEPROM.begin(EEPROM_SIZE);
 
-  scan_networks();
+  int wifi_idx = scan_networks();
 
   pinMode(MODE_PIN, INPUT_PULLUP);
   mode = (digitalRead(MODE_PIN) == LOW ? 1 : 0);
+  if (wifi_idx < 0) {
+    mode = 1;
+    Serial.println("No WiFi access data available.");
+  }
 
   pinMode(CASE_PIN, INPUT_PULLUP);
   case_closed = (digitalRead(CASE_PIN) == LOW ? 1 : 0);
@@ -101,18 +106,15 @@ void setup() {
     Serial.println("SSID:     led-display");
     Serial.println("Password: led-display");
     my_ip = WiFi.softAPIP();
-
-    /*
-    // Set up HTTP-Server
-    server.on("/", serveIndex);
-    server.on("/set", handleSet);
-    server.on("/get", handleGet);
-    server.onNotFound(handleOther);
-    server.begin();
-    */
   } else {
     // Slave mode
     Serial.println("Set to Slave-mode");
+
+    char ssid[getSSIDLength(wifi_idx)];
+    getSSID(wifi_idx, ssid);
+
+    char password[getKeyLength(wifi_idx)];
+    getKey(wifi_idx, password);
 
     WiFi.begin(ssid, password);
     Serial.print("Connecting");
@@ -157,6 +159,70 @@ void setup() {
 }
 
 
+void getSSID(int idx, char buffer[]) {
+  uint16_t eeprom_idx = 1;
+  uint8_t s = 0;
+  for (int i = 0; i < idx; i++) {
+    s = EEPROM.read(eeprom_idx++);
+    eeprom_idx += s;
+    s = EEPROM.read(eeprom_idx++);
+    eeprom_idx += s;
+  }
+  s = EEPROM.read(eeprom_idx++);
+  for (int i = 0; i < s; i++) {
+    buffer[i] = char(EEPROM.read(eeprom_idx++));
+  }
+}
+
+
+int getSSIDLength(int idx) {
+  uint16_t eeprom_idx = 1;
+  uint8_t s = 0;
+  for (int i = 0; i < idx; i++) {
+    s = EEPROM.read(eeprom_idx++);
+    eeprom_idx += s;
+    s = EEPROM.read(eeprom_idx++);
+    eeprom_idx += s;
+  }
+  s = EEPROM.read(eeprom_idx++);
+  return (int)s;
+}
+
+
+void getKey(int idx, char buffer[]) {
+  uint16_t eeprom_idx = 1;
+  uint8_t p = 0;
+  for (int i = 0; i < idx; i++) {
+    p = EEPROM.read(eeprom_idx++);
+    eeprom_idx += p;
+    p = EEPROM.read(eeprom_idx++);
+    eeprom_idx += p;
+  }
+  p = EEPROM.read(eeprom_idx++);
+  eeprom_idx += p;
+  p = EEPROM.read(eeprom_idx++);
+  for (int i = 0; i < p; i++) {
+    buffer[i] = char(EEPROM.read(eeprom_idx++));
+  }
+}
+
+
+int getKeyLength(int idx) {
+  uint16_t eeprom_idx = 1;
+  uint8_t p = 0;
+  for (int i = 0; i < idx; i++) {
+    p = EEPROM.read(eeprom_idx++);
+    eeprom_idx += p;
+    p = EEPROM.read(eeprom_idx++);
+    eeprom_idx += p;
+  }
+  p = EEPROM.read(eeprom_idx++);
+  eeprom_idx += p;
+  p = EEPROM.read(eeprom_idx++);
+  return (int)p;
+}
+
+
 void serveIndex() {
   server.send(200, "text/html", FPSTR(html_index));
   sendProgmem(&server, html_index);
@@ -164,8 +230,9 @@ void serveIndex() {
 
 
 void handleGet() {
+  Serial.println("GET request: ");
   for (int i = 0; i < server.args(); i++) {
-    Serial.print("GET request: ");
+    Serial.print("\t");
     Serial.print(server.argName(i));
     Serial.print("=");
     Serial.println(server.arg(i));
@@ -177,10 +244,16 @@ void handleGet() {
        } else {
          server.send(404, "text/plain", "Invalid value: " + server.arg(i));
        }
-     } else {
-       server.send(404, "text/plain", "Invalid argument: " + server.argName(i));
-     }
-   }
+    } else if (server.argName(i) == "s") {
+      Serial.println(server.arg(i).length());
+      server.send(200, "text/plain", server.arg(i));
+    } else if (server.argName(i) == "p") {
+      Serial.println(server.arg(i).length());
+      server.send(200, "text/plain", server.arg(i));
+    } else {
+      server.send(404, "text/plain", "Invalid argument: " + server.argName(i));
+    }
+  }
 }
 
 
@@ -208,7 +281,6 @@ int scan_networks() {
   if (n == 0) {
     Serial.println("No WiFi networks found.");
     scannedWiFis = "[]";
-    return 0;
   } else {
     Serial.printf("%d WiFi networks found\n", n);
     scannedWiFis = "[";
@@ -254,6 +326,31 @@ int scan_networks() {
   }
   storedWiFis += "]";
   storedKeys += "]";
+
+  if (n == 0) return -1;
+  else if (e == 0) return -2;
+  else {
+    eeprom_idx = 1;
+    for (int i = 0; i < e; i++) {
+      s = EEPROM.read(eeprom_idx++);
+      for (int j = 0; j < n; j++) {
+        for (int k = 0; k < s; k++) {
+          if (char(EEPROM.read(eeprom_idx+k)) != WiFi.SSID(j).charAt(k)) {
+            k = s + 1;
+          }
+          if (k == s - 1) {
+            if (k == WiFi.SSID(j).length() - 1) {
+              return i;
+            }
+          }
+        }
+      }
+      eeprom_idx += s;
+      p = EEPROM.read(eeprom_idx++);
+      eeprom_idx += p;
+    }
+    return -3;
+  }
 }
 
 
